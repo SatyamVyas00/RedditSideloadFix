@@ -2,6 +2,9 @@
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
 #import "fishhook/fishhook.h"
+#import <SafariServices/SafariServices.h>
+#import <UIKit/UIKit.h>
+
 
 #define BUNDLE_NAME @"Reddit"
 #define BUNDLE_ID @"com.reddit.Reddit"
@@ -212,6 +215,38 @@ static void initRecaptchaFix() {
   rebind_symbols((struct rebinding[]){{
     "class_addMethod", (void *)hook_class_addMethod, (void **)&orig_class_addMethod,
   }}, 1);
+}
+// Force Safari-based OAuth login by intercepting the login URL construction
+%hook NSURLComponents
+
++ (instancetype)componentsWithString:(NSString *)URLString {
+    NSURLComponents *components = %orig;
+    // Intercept Reddit's OAuth URL and force response_type=code (browser flow)
+    if ([URLString containsString:@"reddit.com/api/v1/authorize"] && 
+        [URLString containsString:@"response_type=token"]) {
+        NSString *fixed = [URLString stringByReplacingOccurrencesOfString:@"response_type=token"
+                                                               withString:@"response_type=code"];
+        return %orig(fixed);
+    }
+    return components;
+}
+
+%end
+
+// Open Reddit OAuth in Safari instead of in-app webview
+static void openSafariLogin(void) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        UIViewController *root = [UIApplication sharedApplication]
+                                    .keyWindow.rootViewController;
+        if (!root) return;
+        
+        NSURL *oauthURL = [NSURL URLWithString:
+            @"https://www.reddit.com/login/?dest=https%3A%2F%2Fwww.reddit.com%2F"];
+        SFSafariViewController *safari = 
+            [[SFSafariViewController alloc] initWithURL:oauthURL];
+        [root presentViewController:safari animated:YES completion:nil];
+    });
 }
 
 %ctor {
