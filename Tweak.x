@@ -250,8 +250,14 @@ static void openSafariLogin(void) {
 }
 
 %ctor {
-  originalBundleIdentifier = NSBundle.mainBundle.bundleIdentifier;
-  %init;
-  initSideloadedFixes();
-  initRecaptchaFix();
+    originalBundleIdentifier = NSBundle.mainBundle.bundleIdentifier;
+    %init;
+    initSideloadedFixes();
+    initRecaptchaFix();
+    
+    // If first launch or login screen detected, open Safari login
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if (![defaults boolForKey:@"RSF_hasLoggedIn"]) {
+        openSafariLogin();
+    }
 }
