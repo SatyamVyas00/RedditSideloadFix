@@ -214,7 +214,15 @@ API_AVAILABLE(ios(13.0))
 API_AVAILABLE(ios(13.0))
 @implementation RSFAuthPresenter
 - (ASPresentationAnchor)presentationAnchorForWebAuthenticationSession:(ASWebAuthenticationSession *)session {
-    return [UIApplication sharedApplication].keyWindow;
+    UIWindow *window = nil;
+for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
+    if (scene.activationState == UISceneActivationStateForegroundActive) {
+        window = scene.windows.firstObject;
+        break;
+    }
+}
+return window;
+
 }
 @end
 
