@@ -4,6 +4,7 @@
 #import "fishhook/fishhook.h"
 #import <SafariServices/SafariServices.h>
 #import <UIKit/UIKit.h>
+#import <AuthenticationServices/AuthenticationServices.h>
 
 
 #define BUNDLE_NAME @"Reddit"
@@ -233,21 +234,53 @@ static void initRecaptchaFix() {
 
 %end
 
-// Open Reddit OAuth in Safari instead of in-app webview
 static void openSafariLogin(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        UIViewController *root = [UIApplication sharedApplication]
-                                    .keyWindow.rootViewController;
-        if (!root) return;
         
         NSURL *oauthURL = [NSURL URLWithString:
             @"https://www.reddit.com/login/?dest=https%3A%2F%2Fwww.reddit.com%2F"];
-        SFSafariViewController *safari = 
-            [[SFSafariViewController alloc] initWithURL:oauthURL];
-        [root presentViewController:safari animated:YES completion:nil];
+        
+        ASWebAuthenticationSession *session = [[ASWebAuthenticationSession alloc]
+            initWithURL:oauthURL
+            callbackURLScheme:@"reddit"
+            completionHandler:^(NSURL *callbackURL, NSError *error) {
+                if (callbackURL) {
+                    // Pass the callback URL back to the app
+                    [[UIApplication sharedApplication] openURL:callbackURL 
+                                                       options:@{} 
+                                             completionHandler:nil];
+                }
+            }];
+        
+        session.prefersEphemeralWebBrowserSession = NO;
+        [session start];
     });
 }
+// Handle the OAuth redirect back from Safari
+%hook UIApplication
+
+- (BOOL)application:(UIApplication *)app 
+            openURL:(NSURL *)url 
+            options:(NSDictionary<UIApplicationOpenURLOptionsKey,id> *)options {
+    
+    if ([[url scheme] isEqualToString:@"reddit"] || 
+        [[url scheme] isEqualToString:@"com.reddit.Reddit"]) {
+        
+        // Dismiss the Safari sheet first
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIViewController *root = [UIApplication sharedApplication]
+                                        .keyWindow.rootViewController;
+            if (root.presentedViewController) {
+                [root.presentedViewController dismissViewControllerAnimated:YES 
+                                                                 completion:nil];
+            }
+        });
+    }
+    return %orig;
+}
+
+%end
 
 %ctor {
     originalBundleIdentifier = NSBundle.mainBundle.bundleIdentifier;
