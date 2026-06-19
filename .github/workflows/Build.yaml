@@ -3,7 +3,7 @@ name: Build RedditSideloadFix
 on:
   push:
     branches: [master]
-  workflow_dispatch:  # lets you trigger it manually from the Actions tab
+  workflow_dispatch:
 
 jobs:
   build:
@@ -13,9 +13,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          submodules: recursive  # important — pulls in fishhook
+          submodules: recursive
+
+      - name: Cache Theos
+        id: cache-theos
+        uses: actions/cache@v4
+        with:
+          path: theos
+          key: theos-${{ runner.os }}-v1
 
       - name: Install Theos
+        if: steps.cache-theos.outputs.cache-hit != 'true'
         uses: Randomblock1/theos-action@v1
         with:
           theos-sdks: 'https://github.com/theos/sdks'
