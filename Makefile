@@ -12,7 +12,7 @@ $(TWEAK_NAME)_FILES = Tweak.x fishhook/fishhook.c
 
 $(TWEAK_NAME)_CFLAGS = -fobjc-arc
 
-$(TWEAK_NAME)_FRAMEWORKS = SafariServices UIKit
+$(TWEAK_NAME)_FRAMEWORKS = SafariServices UIKit AuthenticationServices
 
 _CODESIGN_IPA = 0
 
