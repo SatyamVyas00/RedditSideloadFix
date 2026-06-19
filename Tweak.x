@@ -9,8 +9,6 @@
 #define BUNDLE_ID @"com.reddit.Reddit"
 #define TEAM_ID @"2TDUX39LX8"
 
-// https://github.com/opa334/IGSideloadFix
-
 static NSString *keychainAccessGroup;
 static NSString *originalKeychainAccessGroup;
 static NSURL *fakeGroupContainerURL;
@@ -74,7 +72,7 @@ static void loadKeychainAccessGroup() {
         originalKeychainAccessGroup =
             [keychainAccessGroup stringByReplacingCharactersInRange:NSMakeRange(0, 10)
                                                         withString:TEAM_ID];
-        NSLog(@"loaded keychainAccessGroup: %@", keychainAccessGroup);
+        NSLog(@"RSF: loaded keychainAccessGroup: %@", keychainAccessGroup);
     }
     CFRelease(result);
 }
@@ -109,7 +107,8 @@ static OSStatus hook_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *resul
     if (CFDictionaryContainsKey(query, kSecAttrAccessGroup)) {
         CFMutableDictionaryRef mutableQuery =
             CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, query);
-        CFDictionarySetValue(mutableQuery, kSecAttrAccessGroup, (__bridge void *)keychainAccessGroup);
+        CFDictionarySetValue(mutableQuery, kSecAttrAccessGroup,
+                             (__bridge void *)keychainAccessGroup);
         query = CFDictionaryCreateCopy(kCFAllocatorDefault, mutableQuery);
         CFRelease(mutableQuery);
     }
@@ -131,7 +130,8 @@ static OSStatus hook_SecItemDelete(CFDictionaryRef query) {
     if (CFDictionaryContainsKey(query, kSecAttrAccessGroup)) {
         CFMutableDictionaryRef mutableQuery =
             CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, query);
-        CFDictionarySetValue(mutableQuery, kSecAttrAccessGroup, (__bridge void *)keychainAccessGroup);
+        CFDictionarySetValue(mutableQuery, kSecAttrAccessGroup,
+                             (__bridge void *)keychainAccessGroup);
         query = CFDictionaryCreateCopy(kCFAllocatorDefault, mutableQuery);
         CFRelease(mutableQuery);
     }
@@ -143,7 +143,8 @@ static OSStatus hook_SecItemUpdate(CFDictionaryRef query, CFDictionaryRef attrib
     if (CFDictionaryContainsKey(query, kSecAttrAccessGroup)) {
         CFMutableDictionaryRef mutableQuery =
             CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, query);
-        CFDictionarySetValue(mutableQuery, kSecAttrAccessGroup, (__bridge void *)keychainAccessGroup);
+        CFDictionarySetValue(mutableQuery, kSecAttrAccessGroup,
+                             (__bridge void *)keychainAccessGroup);
         query = CFDictionaryCreateCopy(kCFAllocatorDefault, mutableQuery);
         CFRelease(mutableQuery);
     }
@@ -183,7 +184,8 @@ static void recaptcha_hook(id self, SEL _cmd, id arg) {
         }
         return;
     }
-    if ([arg isKindOfClass:NSString.class] && [(NSString *)arg isEqualToString:originalBundleIdentifier])
+    if ([arg isKindOfClass:NSString.class] &&
+        [(NSString *)arg isEqualToString:originalBundleIdentifier])
         arg = BUNDLE_ID;
     orig_imp = (void (*)(id, SEL, id))method_getImplementation(method);
     orig_imp(self, orig_name, arg);
@@ -191,9 +193,16 @@ static void recaptcha_hook(id self, SEL _cmd, id arg) {
 
 static BOOL (*orig_class_addMethod)(Class, SEL, IMP, const char *);
 static BOOL hook_class_addMethod(Class cls, SEL name, IMP imp, const char *types) {
-    NSString *methodEncoding = [@(types) stringByReplacingOccurrencesOfString:@"[0-9]+" withString:@"" options:NSRegularExpressionSearch range:NSMakeRange(0, strlen(types))];
-    if ([class_getSuperclass(cls) isEqual:objc_getClass("RCAx_GPBMessage")] && [methodEncoding isEqualToString:@"v@:@"]) {
-        if (!orig_class_addMethod(cls, NSSelectorFromString([@"orig_" stringByAppendingString:NSStringFromSelector(name)]), imp, types))
+    NSString *methodEncoding = [@(types) stringByReplacingOccurrencesOfString:@"[0-9]+"
+                                                                   withString:@""
+                                                                      options:NSRegularExpressionSearch
+                                                                        range:NSMakeRange(0, strlen(types))];
+    if ([class_getSuperclass(cls) isEqual:objc_getClass("RCAx_GPBMessage")] &&
+        [methodEncoding isEqualToString:@"v@:@"]) {
+        if (!orig_class_addMethod(
+                cls,
+                NSSelectorFromString([@"orig_" stringByAppendingString:NSStringFromSelector(name)]),
+                imp, types))
             return orig_class_addMethod(cls, name, imp, types);
         imp = (IMP)recaptcha_hook;
     }
@@ -206,23 +215,120 @@ static void initRecaptchaFix() {
     }}, 1);
 }
 
-// Safari login via ASWebAuthenticationSession (iOS 13+)
+// Login helper — exchanges reddit_session cookie for access token
+API_AVAILABLE(ios(13.0))
+@interface RSFLoginHelper : NSObject
++ (void)exchangeSessionCookie;
+@end
+
+API_AVAILABLE(ios(13.0))
+@implementation RSFLoginHelper
+
++ (void)exchangeSessionCookie {
+    // Find reddit_session cookie from web login
+    NSArray *cookies = [[NSHTTPCookieStorage sharedHTTPCookieStorage] cookies];
+    NSString *sessionCookie = nil;
+    for (NSHTTPCookie *cookie in cookies) {
+        if ([cookie.name isEqualToString:@"reddit_session"] &&
+            [cookie.domain containsString:@"reddit.com"]) {
+            sessionCookie = cookie.value;
+            break;
+        }
+    }
+
+    if (!sessionCookie) {
+        NSLog(@"RSF: No reddit_session cookie found");
+        return;
+    }
+
+    NSLog(@"RSF: Found reddit_session cookie, exchanging for token...");
+
+    NSURL *url = [NSURL URLWithString:
+        @"https://www.reddit.com/auth/v2/oauth/access-token/session"];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.HTTPMethod = @"POST";
+
+    // Real client ID from Reddit iOS app
+    NSString *credentials = @"LNDo9k1o8UAEUw:";
+    NSData *credData = [credentials dataUsingEncoding:NSUTF8StringEncoding];
+    NSString *b64 = [credData base64EncodedStringWithOptions:0];
+    [request setValue:[NSString stringWithFormat:@"Basic %@", b64]
+   forHTTPHeaderField:@"Authorization"];
+
+    [request setValue:@"application/json"
+   forHTTPHeaderField:@"Content-Type"];
+    [request setValue:[NSString stringWithFormat:@"reddit_session=%@", sessionCookie]
+   forHTTPHeaderField:@"Cookie"];
+    [request setValue:@"Reddit/Version 2026.21.0/Build 630876/iOS Version 16.0 (Build 20A362)"
+   forHTTPHeaderField:@"User-Agent"];
+
+    NSData *body = [@"{\"scopes\":[\"*\",\"email\",\"pii\",\"adsread\",\"adsedit\"]}"
+                    dataUsingEncoding:NSUTF8StringEncoding];
+    request.HTTPBody = body;
+
+    [[NSURLSession.sharedSession dataTaskWithRequest:request
+                                  completionHandler:^(NSData *data,
+                                                      NSURLResponse *response,
+                                                      NSError *error) {
+        if (error) {
+            NSLog(@"RSF: Token exchange error: %@", error);
+            return;
+        }
+        NSString *responseStr = [[NSString alloc] initWithData:data
+                                                      encoding:NSUTF8StringEncoding];
+        NSLog(@"RSF: Token exchange response: %@", responseStr);
+
+        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data
+                                                             options:0
+                                                               error:nil];
+        NSString *accessToken = json[@"access_token"];
+
+        if (accessToken) {
+            NSLog(@"RSF: Got access token, storing...");
+            // Store in keychain so the app picks it up
+            NSDictionary *keychainItem = @{
+                (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+                (__bridge id)kSecAttrService: @"com.reddit.Reddit",
+                (__bridge id)kSecAttrAccount: @"access_token",
+                (__bridge id)kSecValueData: [accessToken dataUsingEncoding:NSUTF8StringEncoding],
+            };
+            SecItemDelete((__bridge CFDictionaryRef)keychainItem);
+            SecItemAdd((__bridge CFDictionaryRef)keychainItem, nil);
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [[NSUserDefaults standardUserDefaults] setBool:YES
+                                                       forKey:@"RSF_hasLoggedIn"];
+                [[NSUserDefaults standardUserDefaults] synchronize];
+                // Notify app to refresh auth state
+                [[NSNotificationCenter defaultCenter]
+                    postNotificationName:UIApplicationDidBecomeActiveNotification
+                                  object:nil];
+            });
+        } else {
+            NSLog(@"RSF: No access token in response: %@", responseStr);
+        }
+    }] resume];
+}
+
+@end
+
+// Presentation anchor for ASWebAuthenticationSession
 API_AVAILABLE(ios(13.0))
 @interface RSFAuthPresenter : NSObject <ASWebAuthenticationPresentationContextProviding>
 @end
 
 API_AVAILABLE(ios(13.0))
 @implementation RSFAuthPresenter
-- (ASPresentationAnchor)presentationAnchorForWebAuthenticationSession:(ASWebAuthenticationSession *)session {
+- (ASPresentationAnchor)presentationAnchorForWebAuthenticationSession:
+    (ASWebAuthenticationSession *)session {
     UIWindow *window = nil;
-for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
-    if (scene.activationState == UISceneActivationStateForegroundActive) {
-        window = scene.windows.firstObject;
-        break;
+    for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (scene.activationState == UISceneActivationStateForegroundActive) {
+            window = scene.windows.firstObject;
+            break;
+        }
     }
-}
-return window;
-
+    return window;
 }
 @end
 
@@ -234,37 +340,20 @@ static void openSafariLogin(void) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
 
-            // Use Reddit's compact authorize page with the native app client ID
-            // Client ID sourced from Reddit's own iOS app traffic
-            NSString *state = [[NSUUID UUID] UUIDString];
-            NSString *urlStr = [NSString stringWithFormat:
-                @"https://www.reddit.com/api/v1/authorize.compact"
-                @"?client_id=LNDo9k_YLwZFUg"
-                @"&response_type=code"
-                @"&state=%@"
-                @"&redirect_uri=reddit%%3A%%2F%%2Fsuccess"
-                @"&duration=permanent"
-                @"&scope=account,creddits,edit,flair,history,identity,livemanage,modconfig,"
-                @"modflair,modlog,modmail,modothers,modposts,modself,modwiki,mysubreddits,"
-                @"privatemessages,read,report,save,structuredstyles,submit,subscribe,"
-                @"vote,wikiedit,wikiread",
-                state];
+            NSURL *loginURL = [NSURL URLWithString:
+                @"https://www.reddit.com/login/?dest=https%3A%2F%2Fwww.reddit.com%2F"];
 
-            NSURL *oauthURL = [NSURL URLWithString:urlStr];
             authPresenter = [[RSFAuthPresenter alloc] init];
 
             ASWebAuthenticationSession *session = [[ASWebAuthenticationSession alloc]
-                initWithURL:oauthURL
+                initWithURL:loginURL
                 callbackURLScheme:@"reddit"
                 completionHandler:^(NSURL *callbackURL, NSError *error) {
-                    if (callbackURL) {
-                        // Hand the callback URL to the app to complete login
-                        [[UIApplication sharedApplication] openURL:callbackURL
-                                                           options:@{}
-                                                 completionHandler:nil];
-                        [[NSUserDefaults standardUserDefaults] setBool:YES
-                                                               forKey:@"RSF_hasLoggedIn"];
-                        [[NSUserDefaults standardUserDefaults] synchronize];
+                    NSLog(@"RSF: Web login completed, callbackURL: %@, error: %@",
+                          callbackURL, error);
+                    // Exchange the session cookie for an access token
+                    if (@available(iOS 13.0, *)) {
+                        [RSFLoginHelper exchangeSessionCookie];
                     }
                 }];
 
@@ -276,7 +365,6 @@ static void openSafariLogin(void) {
         });
     }
 }
-
 
 %ctor {
     originalBundleIdentifier = NSBundle.mainBundle.bundleIdentifier;
