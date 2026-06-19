@@ -233,9 +233,24 @@ static void openSafariLogin(void) {
     if (@available(iOS 13.0, *)) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
-            NSURL *oauthURL = [NSURL URLWithString:
-                @"https://www.reddit.com/login/?dest=https%3A%2F%2Fwww.reddit.com%2F"];
 
+            // Use Reddit's compact authorize page with the native app client ID
+            // Client ID sourced from Reddit's own iOS app traffic
+            NSString *state = [[NSUUID UUID] UUIDString];
+            NSString *urlStr = [NSString stringWithFormat:
+                @"https://www.reddit.com/api/v1/authorize.compact"
+                @"?client_id=LNDo9k_YLwZFUg"
+                @"&response_type=code"
+                @"&state=%@"
+                @"&redirect_uri=reddit%%3A%%2F%%2Fsuccess"
+                @"&duration=permanent"
+                @"&scope=account,creddits,edit,flair,history,identity,livemanage,modconfig,"
+                @"modflair,modlog,modmail,modothers,modposts,modself,modwiki,mysubreddits,"
+                @"privatemessages,read,report,save,structuredstyles,submit,subscribe,"
+                @"vote,wikiedit,wikiread",
+                state];
+
+            NSURL *oauthURL = [NSURL URLWithString:urlStr];
             authPresenter = [[RSFAuthPresenter alloc] init];
 
             ASWebAuthenticationSession *session = [[ASWebAuthenticationSession alloc]
@@ -243,21 +258,25 @@ static void openSafariLogin(void) {
                 callbackURLScheme:@"reddit"
                 completionHandler:^(NSURL *callbackURL, NSError *error) {
                     if (callbackURL) {
+                        // Hand the callback URL to the app to complete login
                         [[UIApplication sharedApplication] openURL:callbackURL
                                                            options:@{}
                                                  completionHandler:nil];
-                        [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"RSF_hasLoggedIn"];
+                        [[NSUserDefaults standardUserDefaults] setBool:YES
+                                                               forKey:@"RSF_hasLoggedIn"];
                         [[NSUserDefaults standardUserDefaults] synchronize];
                     }
                 }];
 
-            session.presentationContextProvider = (id<ASWebAuthenticationPresentationContextProviding>)authPresenter;
+            session.presentationContextProvider =
+                (id<ASWebAuthenticationPresentationContextProviding>)authPresenter;
             session.prefersEphemeralWebBrowserSession = NO;
             authSession = session;
             [session start];
         });
     }
 }
+
 
 %ctor {
     originalBundleIdentifier = NSBundle.mainBundle.bundleIdentifier;
